@@ -7,6 +7,10 @@
 #include <signal.h>
 #include <climits>
 #include <memory>
+#include <thread>
+#include <fstream>
+#include <sstream>
+#include <chrono>
 
 
 #ifdef PYTHON
@@ -33,6 +37,40 @@ void sigint_handler(int a)
     _exit(0);
 }
 
+void user_input_thread_func(BaseSystem* system) {
+    std::cout << "Reading user input from named pipe '/tmp/mapf_input'..." << std::endl;
+    std::cout << "To send commands, use: echo 'agent_id start goal' > /tmp/mapf_input" << std::endl;
+    std::cout << "Example: echo '0 5 20' > /tmp/mapf_input" << std::endl;
+    
+    // Create the named pipe if it doesn't exist
+    //system("mkfifo /tmp/mapf_input 2>/dev/null");
+    
+    while (true) {
+        std::ifstream input_pipe("/tmp/mapf_input");
+        if (input_pipe.is_open()) {
+            std::string line;
+            if (std::getline(input_pipe, line)) {
+                std::istringstream iss(line);
+                int agent_id, start, goal;
+                if (iss >> agent_id >> start >> goal) {
+                    if (agent_id == -1) {
+                        std::cout << "Received quit signal (-1)" << std::endl;
+                        input_pipe.close();
+                        return;
+                    }
+                    std::cout << "Assigning task: agent " << agent_id << " from " << start << " to " << goal << std::endl;
+                    {
+                        std::lock_guard<std::mutex> lock(system->new_tasks_mutex);
+                        system->new_tasks_queue.push({agent_id, start, goal});
+                    }
+                }
+            }
+            input_pipe.close();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100ms
+    }
+}
+
 
 int main(int argc, char **argv)
 {
@@ -52,7 +90,7 @@ int main(int argc, char **argv)
         ("evaluationMode", po::value<bool>()->default_value(false), "evaluate an existing output file")
         ("simulationTime", po::value<int>()->default_value(5000), "run simulation")
         ("fileStoragePath", po::value<std::string>()->default_value(""), "the path to the storage path")
-        ("planTimeLimit", po::value<int>()->default_value(100), "the time limit for planner in seconds")
+        ("planTimeLimit", po::value<int>()->default_value(INT_MAX), "the time limit for planner in seconds")
         ("preprocessTimeLimit", po::value<int>()->default_value(INT_MAX), "the time limit for preprocessing in seconds")
         ("logFile,l", po::value<std::string>()->default_value(""), "issue log file name");
     clock_t start_time = clock();
@@ -158,7 +196,10 @@ int main(int argc, char **argv)
 
     signal(SIGINT, sigint_handler);
 
+    // Start user input thread for dynamic task assignment
+    std::thread input_thread(user_input_thread_func, system_ptr.get());
     system_ptr->simulate(vm["simulationTime"].as<int>());
+    input_thread.join();
 
     if (!vm["evaluationMode"].as<bool>())
     {

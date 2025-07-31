@@ -8,12 +8,20 @@
 #include "Logger.h"
 #include <pthread.h>
 #include <future>
+#include <queue>
+#include <mutex>
 
 class BaseSystem
 {
 public:
     int num_tasks_reveal = 1;
     Logger* logger = nullptr;
+
+    struct NewTask {
+        int agent_id;   // -1 for any free agent
+        int start_loc;
+        int goal_loc;
+    };
 
 	BaseSystem(Grid &grid, MAPFPlanner* planner, ActionModelWithRotate* model):
         map(grid), planner(planner), env(planner->env), model(model)
@@ -45,6 +53,9 @@ public:
     //void saveSimulationIssues(const string &fileName) const;
     void saveResults(const string &fileName, int screen) const;
 
+
+    std::queue<NewTask> new_tasks_queue;
+    std::mutex new_tasks_mutex;
 
 protected:
     Grid map;
@@ -87,6 +98,9 @@ protected:
     int num_of_task_finish = 0;
     list<double> planner_times; 
     bool fast_mover_feasible = true;
+    
+    // Task ID counter for dynamic task assignment
+    int task_id = 0;
 
 
 	void initialize();
@@ -123,7 +137,6 @@ public:
             exit(1);
         }
 
-        int task_id = 0;
         num_of_agents = start_locs.size();
         starts.resize(num_of_agents);
         task_queue.resize(num_of_agents);
@@ -158,7 +171,6 @@ public:
 	TaskAssignSystem(Grid &grid, MAPFPlanner* planner, std::vector<int>& start_locs, std::vector<int>& tasks, ActionModelWithRotate* model):
         BaseSystem(grid, planner, model)
     {
-        int task_id = 0;
         for (auto& task_location: tasks)
         {
             all_tasks.emplace_back(task_id++, task_location);
@@ -212,7 +224,6 @@ private:
     std::vector<int>& tasks;
     std::vector<int> task_counter;
     int tasks_size;
-    int task_id = 0;
 
 	void update_tasks();
 };
