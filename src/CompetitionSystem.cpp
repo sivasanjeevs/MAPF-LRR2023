@@ -600,35 +600,6 @@ void FixedAssignSystem::update_tasks()
             // log_event_assigned(k, task.task_id, timestep);
         }
     }
-
-    std::lock_guard<std::mutex> lock(this->new_tasks_mutex);
-    while (!this->new_tasks_queue.empty()) {
-        NewTask nt = this->new_tasks_queue.front();
-        // Find a free agent (or use nt.agent_id if specified)
-        int assign_agent = -1;
-        if (nt.agent_id >= 0 && nt.agent_id < num_of_agents && assigned_tasks[nt.agent_id].empty()) {
-            assign_agent = nt.agent_id;
-        } else if (nt.agent_id == -1) {
-            for (int k = 0; k < num_of_agents; k++) {
-                if (assigned_tasks[k].empty()) {
-                    assign_agent = k;
-                    break;
-                }
-            }
-        }
-        if (assign_agent == -1) break; // No free agent available
-
-        // Optionally teleport agent to new start
-        curr_states[assign_agent].location = nt.start_loc;
-        starts[assign_agent].location = nt.start_loc;
-
-        Task task(this->task_id++, nt.goal_loc, timestep, assign_agent);
-        assigned_tasks[assign_agent].push_back(task);
-        events[assign_agent].push_back(make_tuple(task.task_id, timestep, "assigned"));
-        all_tasks.push_back(task);
-
-        this->new_tasks_queue.pop();
-        }
 }
 
 
@@ -647,35 +618,6 @@ void TaskAssignSystem::update_tasks()
             all_tasks.push_back(task);
             // log_event_assigned(k, task.task_id, timestep);
         }
-
-        std::lock_guard<std::mutex> lock(this->new_tasks_mutex);
-        while (!this->new_tasks_queue.empty()) {
-            NewTask nt = this->new_tasks_queue.front();
-            // Find a free agent (or use nt.agent_id if specified)
-            int assign_agent = -1;
-            if (nt.agent_id >= 0 && nt.agent_id < num_of_agents && assigned_tasks[nt.agent_id].empty()) {
-                assign_agent = nt.agent_id;
-            } else if (nt.agent_id == -1) {
-                for (int k = 0; k < num_of_agents; k++) {
-                    if (assigned_tasks[k].empty()) {
-                        assign_agent = k;
-                        break;
-                    }
-                }
-            }
-            if (assign_agent == -1) break; // No free agent available
-
-            // Optionally teleport agent to new start
-            curr_states[assign_agent].location = nt.start_loc;
-            starts[assign_agent].location = nt.start_loc;
-
-            Task task(this->task_id++, nt.goal_loc, timestep, assign_agent);
-            assigned_tasks[assign_agent].push_back(task);
-            events[assign_agent].push_back(make_tuple(task.task_id, timestep, "assigned"));
-            all_tasks.push_back(task);
-
-            this->new_tasks_queue.pop();
-        }
     }
 }
 
@@ -687,42 +629,13 @@ void InfAssignSystem::update_tasks(){
         {
             int i = task_counter[k] * num_of_agents + k;
             int loc = tasks[i%tasks_size];
-            Task task(this->task_id,loc,timestep,k);
+            Task task(task_id,loc,timestep,k);
             assigned_tasks[k].push_back(task);
             events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
             // log_event_assigned(k, task.task_id, timestep);
             all_tasks.push_back(task);
-            this->task_id++;
+            task_id++;
             task_counter[k]++;
-        }
-
-        std::lock_guard<std::mutex> lock(this->new_tasks_mutex);
-        while (!this->new_tasks_queue.empty()) {
-            NewTask nt = this->new_tasks_queue.front();
-            // Find a free agent (or use nt.agent_id if specified)
-            int assign_agent = -1;
-            if (nt.agent_id >= 0 && nt.agent_id < num_of_agents && assigned_tasks[nt.agent_id].empty()) {
-                assign_agent = nt.agent_id;
-            } else if (nt.agent_id == -1) {
-                for (int k = 0; k < num_of_agents; k++) {
-                    if (assigned_tasks[k].empty()) {
-                        assign_agent = k;
-                        break;
-                    }
-                }
-            }
-            if (assign_agent == -1) break; // No free agent available
-
-            // Optionally teleport agent to new start
-            curr_states[assign_agent].location = nt.start_loc;
-            starts[assign_agent].location = nt.start_loc;
-
-            Task task(this->task_id++, nt.goal_loc, timestep, assign_agent);
-            assigned_tasks[assign_agent].push_back(task);
-            events[assign_agent].push_back(make_tuple(task.task_id, timestep, "assigned"));
-            all_tasks.push_back(task);
-
-            this->new_tasks_queue.pop();
         }
     }
 }
