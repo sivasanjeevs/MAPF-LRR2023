@@ -149,9 +149,21 @@ void MAPFServer::handle_http_request(const std::string& method, const std::strin
 std::string MAPFServer::handle_reset_request() {
     session_active = false;
     team_size = 0;
+    timestep = 0;
     initial_states.clear();
     history_of_actions.clear();
     history_of_planning_times.clear();
+    
+    // Reset task tracking structures
+    finished_tasks.clear();
+    assigned_tasks.clear();
+    events.clear();
+    all_tasks.clear();
+    solution_costs.clear();
+    num_of_task_finish = 0;
+    task_id = 0;
+    fast_mover_feasible = true;
+    
     nlohmann::json response = {
         {"status", "success"},
         {"message", "Simulation history has been reset."}
@@ -178,7 +190,20 @@ std::string MAPFServer::handle_plan_request(const nlohmann::json& request) {
             team_size = agents.size();
             history_of_actions.clear();
             history_of_planning_times.clear();
+            
+            // Initialize task tracking structures
+            finished_tasks.resize(team_size);
+            assigned_tasks.resize(team_size);
+            events.resize(team_size);
+            solution_costs.resize(team_size, 0);
+            timestep = 0;
+            num_of_task_finish = 0;
+            task_id = 0;
+            fast_mover_feasible = true;
         }
+
+        // Update tasks for this timestep
+        update_tasks(agents, goals);
 
         env->num_of_agents = static_cast<int>(agents.size());
         env->curr_states = agents;
@@ -199,8 +224,29 @@ std::string MAPFServer::handle_plan_request(const nlohmann::json& request) {
             return nlohmann::json({{"error", "Planner Failure"}, {"message", "Planner did not return an action for every agent."}}).dump(4);
         }
 
+        // Update solution costs for agents with goals
+        for (int a = 0; a < team_size; a++) {
+            if (!env->goal_locations[a].empty()) {
+                solution_costs[a]++;
+            }
+        }
+
+        // Check for finished tasks
+        std::vector<State> new_states = action_model->result_states(agents, actions);
+        for (int k = 0; k < team_size; k++) {
+            if (!assigned_tasks[k].empty() && new_states[k].location == assigned_tasks[k].front().location) {
+                Task task = assigned_tasks[k].front();
+                assigned_tasks[k].pop_front();
+                task.t_completed = timestep;
+                finished_tasks[k].push_back(task);
+                num_of_task_finish++;
+                log_event_finished(k, task.task_id, timestep);
+            }
+        }
+
         history_of_actions.push_back(actions);
         history_of_planning_times.push_back(planning_duration.count());
+        timestep++;
 
         nlohmann::json response = {
             {"status", "success"},
@@ -225,10 +271,10 @@ std::string MAPFServer::handle_report_request() {
 
     nlohmann::json report;
     report["actionModel"] = "MAPF_T";
-    report["AllValid"] = "Yes"; // Assuming validity as the server doesn't track this
+    report["AllValid"] = fast_mover_feasible ? "Yes" : "No";
     report["teamSize"] = team_size;
     
-    // "start"
+    // "start" - initial agent positions
     nlohmann::json starts = nlohmann::json::array();
     for(const auto& state : initial_states) {
         starts.push_back({state.location / grid->cols, state.location % grid->cols, orientation_to_string_local(state.orientation)});
@@ -236,37 +282,73 @@ std::string MAPFServer::handle_report_request() {
     report["start"] = starts;
 
     // "numTaskFinished", "sumOfCost", "makespan"
-    // Since the server is stateless, we will use placeholder values or derive simply.
-    int makespan = history_of_actions.size();
-    report["numTaskFinished"] = 0; // Placeholder
-    report["sumOfCost"] = makespan * team_size; // A simple placeholder calculation
-    report["makespan"] = makespan;
-
-    // "actualPaths" and "plannerPaths"
-    // This part is now safe. It correctly handles simulations where agent counts might change.
-    std::vector<std::string> path_strings(team_size, "");
-    for(size_t t = 0; t < history_of_actions.size(); ++t) {
-        // We iterate up to the number of agents in this specific timestep.
-        for(size_t i = 0; i < history_of_actions[t].size(); ++i) {
-            if (i < team_size) { // Safety check against changing team sizes
-                if (t > 0) {
-                    path_strings[i] += ",";
-                }
-                path_strings[i] += action_to_string_local(history_of_actions[t][i]);
+    report["numTaskFinished"] = num_of_task_finish;
+    int sum_of_cost = 0;
+    int makespan = 0;
+    if (team_size > 0) {
+        sum_of_cost = solution_costs[0];
+        makespan = solution_costs[0];
+        for (int a = 1; a < team_size; a++) {
+            sum_of_cost += solution_costs[a];
+            if (solution_costs[a] > makespan) {
+                makespan = solution_costs[a];
             }
         }
     }
-    report["actualPaths"] = path_strings;
-    report["plannerPaths"] = path_strings; // Set to be the same as actual paths
+    report["sumOfCost"] = sum_of_cost;
+    report["makespan"] = makespan;
+
+    // "actualPaths" and "plannerPaths"
+    std::vector<std::string> actual_paths(team_size, "");
+    std::vector<std::string> planner_paths(team_size, "");
+    
+    for(size_t t = 0; t < history_of_actions.size(); ++t) {
+        for(size_t i = 0; i < history_of_actions[t].size() && i < team_size; ++i) {
+            if (t > 0) {
+                actual_paths[i] += ",";
+                planner_paths[i] += ",";
+            }
+            actual_paths[i] += action_to_string_local(history_of_actions[t][i]);
+            planner_paths[i] += action_to_string_local(history_of_actions[t][i]);
+        }
+    }
+    report["actualPaths"] = actual_paths;
+    report["plannerPaths"] = planner_paths;
 
     // "plannerTimes"
     report["plannerTimes"] = history_of_planning_times;
     
-    // "errors", "events", "tasks"
-    // These are set to empty arrays as the server does not track this information.
+    // "errors" - empty for now as the server doesn't track errors
     report["errors"] = nlohmann::json::array();
-    report["events"] = nlohmann::json::array();
-    report["tasks"] = nlohmann::json::array(); // Corrected the typo "tasks_" to "tasks"
+
+    // "events" - task assignment and completion events
+    nlohmann::json events_json = nlohmann::json::array();
+    for (int i = 0; i < team_size; i++) {
+        nlohmann::json agent_events = nlohmann::json::array();
+        for(auto e: events[i]) {
+            nlohmann::json ev = nlohmann::json::array();
+            int task_id, event_timestep;
+            std::string event_msg;
+            std::tie(task_id, event_timestep, event_msg) = e;
+            ev.push_back(task_id);
+            ev.push_back(event_timestep);
+            ev.push_back(event_msg);
+            agent_events.push_back(ev);
+        }
+        events_json.push_back(agent_events);
+    }
+    report["events"] = events_json;
+
+    // "tasks" - all tasks that were created during the simulation
+    nlohmann::json tasks = nlohmann::json::array();
+    for (auto t: all_tasks) {
+        nlohmann::json task = nlohmann::json::array();
+        task.push_back(t.task_id);
+        task.push_back(t.location / grid->cols);
+        task.push_back(t.location % grid->cols);
+        tasks.push_back(task);
+    }
+    report["tasks"] = tasks;
 
     return report.dump(4);
 }
@@ -331,4 +413,29 @@ nlohmann::json MAPFServer::serialize_path(const std::vector<Action>& actions, co
         path_data.push_back(agent_path);
     }
     return path_data;
+}
+
+void MAPFServer::update_tasks(const std::vector<State>& current_states, const std::vector<std::pair<int, int>>& goals) {
+    // For each agent, create a task for their current goal
+    for (size_t i = 0; i < goals.size(); ++i) {
+        if (i < team_size) {
+            // Create a new task for this goal
+            Task task(task_id++, goals[i].first, timestep, static_cast<int>(i));
+            assigned_tasks[i].push_back(task);
+            all_tasks.push_back(task);
+            log_event_assigned(static_cast<int>(i), task.task_id, timestep);
+        }
+    }
+}
+
+void MAPFServer::log_event_assigned(int agent_id, int task_id, int timestep) {
+    if (agent_id < events.size()) {
+        events[agent_id].push_back(std::make_tuple(task_id, timestep, "assigned"));
+    }
+}
+
+void MAPFServer::log_event_finished(int agent_id, int task_id, int timestep) {
+    if (agent_id < events.size()) {
+        events[agent_id].push_back(std::make_tuple(task_id, timestep, "finished"));
+    }
 }
