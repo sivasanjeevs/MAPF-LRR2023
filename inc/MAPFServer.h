@@ -4,15 +4,20 @@
 #include "ActionModel.h"
 #include "MAPFPlanner.h"
 #include "Tasks.h"
-#include <boost/asio.hpp>
-#include <nlohmann/json.hpp>
+#include <iostream>
 #include <string>
-#include <memory>
 #include <vector>
-#include <chrono>
-#include <list>
 #include <deque>
+#include <list>
 #include <tuple>
+#include <chrono>
+#include <fstream>
+#include <csignal>
+#include <csetjmp>
+#include <boost/asio.hpp>
+#include <boost/beast.hpp>
+#include <nlohmann/json.hpp>
+#include <memory>
 
 class MAPFServer {
 public:
@@ -34,11 +39,13 @@ private:
                              const std::string& body, std::string& response);
 
     // Endpoint handlers
-    std::string handle_plan_request(const nlohmann::json& request);
+    std::string handle_plan_request(const std::string& request_body);
     std::string handle_status_request();
     std::string handle_health_request();
     std::string handle_report_request(); // Handler for generating the JSON report
     std::string handle_reset_request();  // Handler to reset the simulation session
+    std::string handle_task_status_request(); // Handler for getting current task status
+    std::string handle_add_task_request(const std::string& request_body); // Handler for adding new tasks
 
     // Helper methods for parsing and serialization
     bool validate_planning_request(const nlohmann::json& request);
@@ -48,8 +55,16 @@ private:
 
     // Task and event tracking methods
     void update_tasks(const std::vector<State>& current_states, const std::vector<std::pair<int, int>>& goals);
+    void update_tasks_lifelong(const std::vector<State>& current_states);
     void log_event_assigned(int agent_id, int task_id, int timestep);
     void log_event_finished(int agent_id, int task_id, int timestep);
+    
+    // Problem loading and initialization
+    bool load_problem_configuration(const std::string& problem_file);
+    void initialize_task_system();
+    bool reload_tasks_from_file(); // Reload tasks from the task file
+    bool add_task_to_file(int location); // Add a new task to the task file
+    void save_results_to_file(); // Save results to test.json file
 
     // --- Member Variables ---
 
@@ -71,6 +86,7 @@ private:
     int team_size = 0;
     int timestep = 0;
     std::vector<State> initial_states;
+    std::vector<State> current_agent_states;  // Track current agent positions for auto-planning
     std::vector<std::vector<Action>> history_of_actions;
     std::vector<double> history_of_planning_times;
     
@@ -83,4 +99,16 @@ private:
     int num_of_task_finish = 0;
     int task_id = 0;
     bool fast_mover_feasible = true;
+    
+    // Track actual vs planned movements separately (like BaseSystem)
+    std::vector<std::list<Action>> actual_movements;
+    std::vector<std::list<Action>> planner_movements;
+    
+    // Task management like the lifelong system
+    std::deque<Task> task_queue;  // For TaskAssignSystem
+    std::vector<int> agent_start_locations;
+    std::vector<int> task_locations;
+    std::string task_file_path;  // Path to the task file for dynamic reloading
+    int num_tasks_reveal = 1;
+    std::string task_assignment_strategy = "greedy";
 };
