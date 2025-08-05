@@ -109,18 +109,18 @@ def main():
     current_agents = [
         {"location": 2, "orientation": 0, "timestep": 0},   # Agent 0
         {"location": 3, "orientation": 0, "timestep": 0},   # Agent 1
-        {"location": 4, "orientation": 0, "timestep": 0},   # Agent 2
-        {"location": 5, "orientation": 0, "timestep": 0},   # Agent 3
-        {"location": 6, "orientation": 0, "timestep": 0}    # Agent 4
+        # {"location": 4, "orientation": 0, "timestep": 0},   # Agent 2
+        # {"location": 5, "orientation": 0, "timestep": 0},   # Agent 3
+        # {"location": 6, "orientation": 0, "timestep": 0}    # Agent 4
     ]
     
     # Initial goals
     goals = [
         {"location": 96, "timestep": 0},  # Goal for agent 0
         {"location": 95, "timestep": 0},  # Goal for agent 1
-        {"location": 91, "timestep": 0},  # Goal for agent 2
-        {"location": 94, "timestep": 0},  # Goal for agent 3
-        {"location": 93, "timestep": 0}   # Goal for agent 4
+        # {"location": 91, "timestep": 0},  # Goal for agent 2
+        # {"location": 94, "timestep": 0},  # Goal for agent 3
+        # {"location": 93, "timestep": 0}   # Goal for agent 4
     ]
     
     # Run simulation for multiple timesteps
@@ -173,9 +173,9 @@ def main():
         print(f"Makespan: {report.get('makespan', 'N/A')}")
         
         # Save report to file
-        with open("test_output.json", "w") as f:
+        with open("test.json", "w") as f:
             json.dump(report, f, indent=4)
-        print("Report saved to test_output.json")
+        print("Report saved to test.json")
     else:
         print("Failed to generate report")
 

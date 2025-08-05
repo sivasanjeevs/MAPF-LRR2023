@@ -39,6 +39,7 @@ private:
     std::string handle_health_request();
     std::string handle_report_request(); // Handler for generating the JSON report
     std::string handle_reset_request();  // Handler to reset the simulation session
+    std::string handle_add_tasks_request(const nlohmann::json& request); // Handler for adding new tasks
 
     // Helper methods for parsing and serialization
     bool validate_planning_request(const nlohmann::json& request);
@@ -48,8 +49,14 @@ private:
 
     // Task and event tracking methods
     void update_tasks(const std::vector<State>& current_states, const std::vector<std::pair<int, int>>& goals);
+    void update_tasks_lifelong(const std::vector<State>& current_states);
     void log_event_assigned(int agent_id, int task_id, int timestep);
     void log_event_finished(int agent_id, int task_id, int timestep);
+    
+    // Problem loading and initialization
+    bool load_problem_configuration(const std::string& problem_file);
+    void initialize_task_system();
+    void check_for_new_tasks(); // Check for new tasks in the file and add them to queue
 
     // --- Member Variables ---
 
@@ -83,4 +90,18 @@ private:
     int num_of_task_finish = 0;
     int task_id = 0;
     bool fast_mover_feasible = true;
+    
+    // Track actual vs planned movements separately (like BaseSystem)
+    std::vector<std::list<Action>> actual_movements;
+    std::vector<std::list<Action>> planner_movements;
+    
+    // Task management like the lifelong system
+    std::deque<Task> task_queue;  // For TaskAssignSystem
+    std::vector<int> agent_start_locations;
+    std::vector<int> task_locations;
+    int num_tasks_reveal = 1;
+    std::string task_assignment_strategy = "greedy";
+    
+    // Current agent states for maintaining state between planning steps
+    std::vector<State> current_agent_states;
 };
