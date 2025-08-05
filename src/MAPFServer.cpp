@@ -87,7 +87,7 @@ bool MAPFServer::initialize() {
         env->cols = grid->cols;
         env->map = grid->map;
         env->map_name = grid->map_name;
-        env->num_of_agents = 5; // Default to 5 agents, will be updated after loading problem config
+        env->num_of_agents = 2; // Default to 5 agents, will be updated after loading problem config
         std::cout << "Environment created" << std::endl;
         
         std::string problem_file = "./example_problems/custom_domain/myproblem.json";
@@ -155,7 +155,6 @@ void MAPFServer::start_http_server() {
         asio::ip::tcp::acceptor acceptor(*io_context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), static_cast<unsigned short>(port)));
         std::cout << "HTTP Server started on port " << port << std::endl;
         std::cout << "Available endpoints:" << std::endl;
-        std::cout << "  POST /plan   - Submit planning request" << std::endl;
         std::cout << "  GET  /status  - Get server status" << std::endl;
         std::cout << "  GET  /health  - Health check" << std::endl;
         std::cout << "  POST /reset   - Reset the simulation history" << std::endl;
@@ -193,9 +192,7 @@ void MAPFServer::start_http_server() {
 void MAPFServer::handle_http_request(const std::string& method, const std::string& path,
                                      const std::string& body, std::string& response) {
     try {
-        if (method == "POST" && path == "/plan") {
-            response = handle_plan_request(body);
-        } else if (method == "GET" && path == "/status") {
+        if (method == "GET" && path == "/status") {
             response = handle_status_request();
         } else if (method == "GET" && path == "/health") {
             response = handle_health_request();
@@ -247,182 +244,6 @@ std::string MAPFServer::handle_reset_request() {
         {"message", "Simulation history has been reset."}
     };
     return response.dump(4);
-}
-
-std::string MAPFServer::handle_plan_request(const std::string& request_body) {
-    try {
-        // Parse JSON request
-        nlohmann::json request;
-        try {
-            request = nlohmann::json::parse(request_body);
-        } catch (const std::exception& e) {
-            return nlohmann::json({{"error", "Invalid JSON"}, {"message", e.what()}}).dump(4);
-        }
-        
-        if (!validate_planning_request(request)) {
-            return nlohmann::json({{"error", "Invalid Request"}, {"message", "Request must contain 'agents' array"}}).dump(4);
-        }
-        
-        // Parse agent states and goals
-        std::vector<State> agents = parse_agent_states(request["agents"]);
-        std::vector<std::pair<int, int>> goals;
-        if (request.contains("goals")) {
-            goals = parse_goals(request["goals"]);
-        }
-        
-        // Initialize session if not active
-        if (!session_active) {
-            session_active = true;
-            team_size = agents.size();
-            history_of_actions.clear();
-            history_of_planning_times.clear();
-            
-            // Initialize task tracking structures
-            finished_tasks.resize(team_size);
-            assigned_tasks.resize(team_size);
-            events.resize(team_size);
-            solution_costs.resize(team_size, 0);
-            actual_movements.resize(team_size);
-            planner_movements.resize(team_size);
-            current_agent_states.resize(team_size);
-            timestep = 0;
-            num_of_task_finish = 0;
-            fast_mover_feasible = true;
-            
-            // Initialize with initial states from problem configuration
-            if (!initial_states.empty()) {
-                agents = initial_states;
-            } else {
-                initial_states = agents;
-            }
-        }
-
-        current_agent_states = agents;
-        update_tasks_lifelong(agents);
-
-        env->curr_states = agents;
-        env->goal_locations.clear();
-        env->goal_locations.resize(team_size);
-        
-        for (int i = 0; i < team_size; i++) {
-            env->goal_locations[i].clear();
-            for (auto& task: assigned_tasks[i]) {
-                env->goal_locations[i].push_back({task.location, task.t_assigned});
-            }
-            if (env->goal_locations[i].empty()) {
-                env->goal_locations[i].push_back({agents[i].location, timestep});
-            }
-        }
-            
-        std::vector<Action> actions;
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        try {
-            planner->plan(5.0, actions);
-        } catch (const std::exception& e) {
-            std::cerr << "Planning failed with exception: " << e.what() << std::endl;
-            actions.assign(team_size, Action::W);
-        } catch (...) {
-            std::cerr << "Unknown planning error" << std::endl;
-            actions.assign(team_size, Action::W);
-        }
-            
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> planning_duration = end_time - start_time;
-        
-        if (actions.size() != agents.size()) {
-            std::cerr << "CRITICAL: Planner returned " << actions.size() 
-                      << " actions for " << agents.size() << " agents. Using wait actions." << std::endl;
-            actions.assign(team_size, Action::W);
-        }
-
-        for (int a = 0; a < team_size; a++) {
-            if (!env->goal_locations[a].empty()) {
-                solution_costs[a]++;
-            }
-        }
-        
-        std::vector<State> new_states;
-        try {
-            new_states = action_model->result_states(agents, actions);
-        } catch (...) {
-            std::cerr << "Result states computation failed, using wait actions" << std::endl;
-            actions.assign(team_size, Action::W);
-            new_states = action_model->result_states(agents, actions);
-        }
-        
-        for (int k = 0; k < team_size; k++) {
-            if (k < new_states.size()) {
-                current_agent_states[k] = new_states[k];
-                if (!assigned_tasks[k].empty() && new_states[k].location == assigned_tasks[k].front().location) {
-                    Task task = assigned_tasks[k].front();
-                    assigned_tasks[k].pop_front();
-                    task.t_completed = timestep;
-                    finished_tasks[k].push_back(task);
-                    num_of_task_finish++;
-                    log_event_finished(k, task.task_id, timestep);
-                }
-            }
-        }
-
-        history_of_actions.push_back(actions);
-        history_of_planning_times.push_back(planning_duration.count());
-        
-        for (int k = 0; k < team_size; k++) {
-            planner_movements[k].push_back(k < actions.size() ? actions[k] : Action::NA);
-        }
-        
-        if (!action_model->is_valid(agents, actions)) {
-            fast_mover_feasible = false;
-            std::vector<Action> wait_actions(team_size, Action::W);
-            for (int k = 0; k < team_size; k++) {
-                actual_movements[k].push_back(wait_actions[k]);
-            }
-        } else {
-            for (int k = 0; k < team_size; k++) {
-                actual_movements[k].push_back(k < actions.size() ? actions[k] : Action::W);
-            }
-        }
-        
-        timestep++;
-        
-        save_results_to_file();
-
-        nlohmann::json task_status = nlohmann::json::array();
-        bool all_tasks_finished = task_queue.empty();
-        
-        for (int k = 0; k < team_size; k++) {
-            nlohmann::json agent_status;
-            agent_status["agent_id"] = k;
-            agent_status["has_task"] = !assigned_tasks[k].empty();
-            if(agent_status["has_task"]) {
-                 all_tasks_finished = false;
-                 Task& task = assigned_tasks[k].front();
-                 agent_status["current_task"] = {
-                    {"task_id", task.task_id},
-                    {"location", task.location},
-                    {"assigned_at", task.t_assigned}
-                };
-            }
-            agent_status["tasks_completed"] = finished_tasks[k].size();
-            task_status.push_back(agent_status);
-        }
-
-        nlohmann::json response = {
-            {"status", "success"},
-            {"timestep", timestep},
-            {"actions", serialize_path(actions, new_states)},
-            {"task_status", task_status},
-            {"tasks_remaining", task_queue.size()},
-            {"total_tasks_completed", num_of_task_finish},
-            {"all_tasks_finished", all_tasks_finished}
-        };
-        return response.dump(4);
-
-    } catch (const std::exception& e) {
-        std::cerr << "Critical error in handle_plan_request: " << e.what() << std::endl;
-        return nlohmann::json({{"error", "Critical Error"}, {"message", e.what()}}).dump(4);
-    }
 }
 
 std::string MAPFServer::handle_report_request() {
