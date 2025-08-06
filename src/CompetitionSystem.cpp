@@ -2,57 +2,36 @@
 #include "CompetitionSystem.h"
 #include <boost/tokenizer.hpp>
 #include "nlohmann/json.hpp"
+#include <fstream>
 #include <functional>
 #include <Logger.h>
+#include "Utils.h" // Include the new utility file
 
 using json = nlohmann::ordered_json;
 
 
-list<Task> BaseSystem::move(vector<Action>& actions)
-{
-    // actions.resize(num_of_agents, Action::NA);
-    for (int k = 0; k < num_of_agents; k++)
-    {
-        //log->log_plan(false,k);
-        if (k >= actions.size()){
-            fast_mover_feasible = false;
-            planner_movements[k].push_back(Action::NA);
-        }
-        else
-        {
-            planner_movements[k].push_back(actions[k]);
-        }
-    }
-
-    list<Task> finished_tasks_this_timestep; // <agent_id, task_id, timestep>
-    if (!valid_moves(curr_states, actions))
-    {
-        fast_mover_feasible = false;
-        actions = std::vector<Action>(num_of_agents, Action::W);
-    }
+std::list<Task> BaseSystem::move(vector<Action>& actions) {
+    std::list<Task> finished_tasks_this_timestep;
+    if (actions.size() != num_of_agents)
+        return finished_tasks_this_timestep;
 
     curr_states = model->result_states(curr_states, actions);
-    // agents do not move
-    for (int k = 0; k < num_of_agents; k++)
-    {
-        if (!assigned_tasks[k].empty() && curr_states[k].location == assigned_tasks[k].front().location)
-        {
-            Task task = assigned_tasks[k].front();
-            assigned_tasks[k].pop_front();
-            task.t_completed = timestep;
-            finished_tasks_this_timestep.push_back(task);
-            events[k].push_back(make_tuple(task.task_id, timestep,"finished"));
-            log_event_finished(k, task.task_id, timestep);
-        }
-        paths[k].push_back(curr_states[k]);
-        actual_movements[k].push_back(actions[k]);
-    }
 
+    for (int k = 0; k < num_of_agents; k++) {
+        if (!assigned_tasks[k].empty() && curr_states[k].location == assigned_tasks[k].front().goal_location) {
+            Task finished_task = assigned_tasks[k].front();
+            assigned_tasks[k].pop_front();
+            finished_task.t_completed = timestep;
+            finished_tasks[k].push_back(finished_task);
+            finished_tasks_this_timestep.push_back(finished_task);
+            log_event_finished(k, finished_task.task_id, timestep);
+            num_of_task_finish++;
+        }
+    }
     return finished_tasks_this_timestep;
 }
 
 
-// This function might not work correctly with small map (w or h <=2)
 bool BaseSystem::valid_moves(vector<State>& prev, vector<Action>& action)
 {
     return model->is_valid(prev, action);
@@ -60,7 +39,6 @@ bool BaseSystem::valid_moves(vector<State>& prev, vector<Action>& action)
 
 
 void BaseSystem::sync_shared_env() {
-
     if (!started){
         env->goal_locations.resize(num_of_agents);
         for (size_t i = 0; i < num_of_agents; i++)
@@ -68,7 +46,7 @@ void BaseSystem::sync_shared_env() {
             env->goal_locations[i].clear();
             for (auto& task: assigned_tasks[i])
             {
-                env->goal_locations[i].push_back({task.location, task.t_assigned });
+                env->goal_locations[i].push_back({task.goal_location, task.t_assigned });
             }
         }
         env->curr_states = curr_states;
@@ -81,7 +59,6 @@ vector<Action> BaseSystem::plan_wrapper()
 {
     vector<Action> actions;
     planner->plan(plan_time_limit, actions);
-
     return actions;
 }
 
@@ -91,7 +68,6 @@ vector<Action> BaseSystem::plan()
     using namespace std::placeholders;
     if (started && future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
     {
-        std::cout << started << "     " << (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) << std::endl;
         if(logger)
         {
             logger->log_info("planner cannot run because the previous run is still running", timestep);
@@ -174,20 +150,14 @@ void BaseSystem::log_event_finished(int agent_id, int task_id, int timestep)
 
 void BaseSystem::simulate(int simulation_time)
 {
-    //init logger
-    //Logger* log = new Logger();
     initialize();
     int num_of_tasks = 0;
 
     for (; timestep < simulation_time; )
     {
-        // find a plan
         sync_shared_env();
-
         auto start = std::chrono::steady_clock::now();
-
         vector<Action> actions = plan();
-
         auto end = std::chrono::steady_clock::now();
 
         timestep += 1;
@@ -197,11 +167,10 @@ void BaseSystem::simulate(int simulation_time)
                 solution_costs[a]++;
         }
 
-        // move drives
         list<Task> new_finished_tasks = move(actions);
         if (!planner_movements[0].empty() && planner_movements[0].back() == Action::NA)
         {
-            planner_times.back()+=plan_time_limit;  //add planning time to last record
+            planner_times.back()+=plan_time_limit;
         }
         else
         {
@@ -209,11 +178,8 @@ void BaseSystem::simulate(int simulation_time)
             planner_times.push_back(std::chrono::duration<double>(diff).count());
         }
 
-        // update tasks
         for (auto task : new_finished_tasks)
         {
-            // int id, loc, t;
-            // std::tie(id, loc, t) = task;
             finished_tasks[task.agent_assigned].emplace_back(task);
             num_of_tasks++;
             num_of_task_finish++;
@@ -221,14 +187,10 @@ void BaseSystem::simulate(int simulation_time)
 
         update_tasks();
 
-        bool complete_all = false;
+        bool complete_all = true;
         for (auto & t: assigned_tasks)
         {
-            if(t.empty()) 
-            {
-                complete_all = true;
-            }
-            else
+            if(!t.empty()) 
             {
                 complete_all = false;
                 break;
@@ -251,138 +213,73 @@ void BaseSystem::initialize()
     env->cols = map.cols;
     env->map = map.map;
     finished_tasks.resize(num_of_agents);
-    // bool succ = load_records(); // continue simulating from the records
     timestep = 0;
     curr_states = starts;
     assigned_tasks.resize(num_of_agents);
 
-    //planner initilise before knowing the first goals
     bool planner_initialize_success= planner_initialize();
-    
     log_preprocessing(planner_initialize_success);
     if (!planner_initialize_success)
         _exit(124);
 
-    // initialize_goal_locations();
     update_tasks();
-
     sync_shared_env();
 
     actual_movements.resize(num_of_agents);
     planner_movements.resize(num_of_agents);
-    solution_costs.resize(num_of_agents);
-    for (int a = 0; a < num_of_agents; a++)
-    {
-        solution_costs[a] = 0;
-    }
+    solution_costs.resize(num_of_agents, 0);
 }
 
 void BaseSystem::savePaths(const string &fileName, int option) const
 {
-    std::ofstream output;
-    output.open(fileName, std::ios::out);
+    std::ofstream output(fileName, std::ios::out);
     for (int i = 0; i < num_of_agents; i++)
     {
         output << "Agent " << i << ": ";
-        if (option == 0)
+        const auto& moves = (option == 0) ? actual_movements[i] : planner_movements[i];
+        bool first = true;
+        for (const auto t : moves)
         {
-            bool first = true;
-            for (const auto t : actual_movements[i])
-            {
-                if (!first)
-                {
-                    output << ",";
-                }
-                else
-                {
-                    first = false;
-                }
-                output << t;
+            if (!first) {
+                output << ",";
             }
+            first = false;
+            output << t;
         }
-        else if (option == 1)
-        {
-            bool first = true;
-            for (const auto t : planner_movements[i])
-            {
-                if (!first)
-                {
-                    output << ",";
-                } 
-                else 
-                {
-                    first = false;
-                }
-                output << t;
-            }
-        }
-        output << endl;
+        output << std::endl;
     }
-    output.close();
 }
 
 
 void BaseSystem::saveResults(const string &fileName, int screen) const
 {
     json js;
-    // Save action model
     js["actionModel"] = "MAPF_T";
-
-    std::string feasible = fast_mover_feasible ? "Yes" : "No";
-    js["AllValid"] = feasible;
-
+    js["AllValid"] = fast_mover_feasible ? "Yes" : "No";
     js["teamSize"] = num_of_agents;
 
-    // Save start locations[x,y,orientation]
     if (screen <= 2)
     {
         json start = json::array();
         for (int i = 0; i < num_of_agents; i++)
         {
-            json s = json::array();
+            json s;
             s.push_back(starts[i].location/map.cols);
             s.push_back(starts[i].location%map.cols);
-            switch (starts[i].orientation)
-            {
-            case 0:
-                s.push_back("E");
-                break;
-            case 1:
-                s.push_back("S");
-            case 2:
-                s.push_back("W");
-                break;
-            case 3:
-                s.push_back("N");
-                break;
-            }
+            s.push_back(orientation_to_string_local(starts[i].orientation));
             start.push_back(s);
         }
         js["start"] = start;
     }
 
     js["numTaskFinished"] = num_of_task_finish;
-    int sum_of_cost = 0;
-    int makespan = 0;
-    if (num_of_agents > 0)
-    {
-        sum_of_cost = solution_costs[0];
-        makespan = solution_costs[0];
-        for (int a = 1; a < num_of_agents; a++)
-        {
-            sum_of_cost += solution_costs[a];
-            if (solution_costs[a] > makespan)
-            {
-                makespan = solution_costs[a];
-            }
-        }
-    }
+    int sum_of_cost = std::accumulate(solution_costs.begin(), solution_costs.end(), 0);
+    int makespan = num_of_agents > 0 ? *std::max_element(solution_costs.begin(), solution_costs.end()) : 0;
     js["sumOfCost"] = sum_of_cost;
     js["makespan"] = makespan;
     
     if (screen <= 2)
     {
-        // Save actual paths
         json apaths = json::array();
         for (int i = 0; i < num_of_agents; i++)
         {
@@ -390,35 +287,9 @@ void BaseSystem::saveResults(const string &fileName, int screen) const
             bool first = true;
             for (const auto action : actual_movements[i])
             {
-                if (!first)
-                {
-                    path+= ",";
-                }
-                else
-                {
-                    first = false;
-                }
-
-                if (action == Action::FW)
-                {
-                    path+="F";
-                }
-                else if (action == Action::CR)
-                {
-                    path+="R";
-                } 
-                else if (action == Action::CCR)
-                {
-                    path+="C";
-                }
-                else if (action == Action::NA)
-                {
-                    path+="T";
-                }
-                else
-                {
-                    path+="W";
-                }
+                if (!first) path+= ",";
+                first = false;
+                path += action_to_string_local(action);
             }
             apaths.push_back(path);
         }
@@ -427,7 +298,6 @@ void BaseSystem::saveResults(const string &fileName, int screen) const
 
     if (screen <=1)
     {
-        //planned paths
         json ppaths = json::array();
         for (int i = 0; i < num_of_agents; i++)
         {
@@ -435,101 +305,49 @@ void BaseSystem::saveResults(const string &fileName, int screen) const
             bool first = true;
             for (const auto action : planner_movements[i])
             {
-                if (!first)
-                {
-                    path+= ",";
-                } 
-                else 
-                {
-                    first = false;
-                }
-
-                if (action == Action::FW)
-                {
-                    path+="F";
-                }
-                else if (action == Action::CR)
-                {
-                    path+="R";
-                } 
-                else if (action == Action::CCR)
-                {
-                    path+="C";
-                } 
-                else if (action == Action::NA)
-                {
-                    path+="T";
-                }
-                else
-                {
-                    path+="W";
-                }
+                if (!first) path+= ",";
+                first = false;
+                path += action_to_string_local(action);
             }  
             ppaths.push_back(path);
         }
         js["plannerPaths"] = ppaths;
 
-        json planning_times = json::array();
-        for (double time: planner_times)
-            planning_times.push_back(time);
-        js["plannerTimes"] = planning_times;
+        js["plannerTimes"] = planner_times;
 
-        // Save errors
         json errors = json::array();
         for (auto error: model->errors)
         {
-            std::string error_msg;
-            int agent1;
-            int agent2;
-            int timestep;
-            std::tie(error_msg,agent1,agent2,timestep) = error;
-            json e = json::array();
-            e.push_back(agent1);
-            e.push_back(agent2);
-            e.push_back(timestep);
-            e.push_back(error_msg);
-            errors.push_back(e);
-
+            errors.push_back({std::get<1>(error), std::get<2>(error), std::get<3>(error), std::get<0>(error)});
         }
         js["errors"] = errors;
 
-        // Save events
         json events_json = json::array();
         for (int i = 0; i < num_of_agents; i++)
         {
             json event = json::array();
             for(auto e: events[i])
             {
-                json ev = json::array();
-                std::string event_msg;
-                int task_id;
-                int timestep;
-                std::tie(task_id,timestep,event_msg) = e;
-                ev.push_back(task_id);
-                ev.push_back(timestep);
-                ev.push_back(event_msg);
-                event.push_back(ev);
+                event.push_back({std::get<0>(e), std::get<1>(e), std::get<2>(e)});
             }
             events_json.push_back(event);
         }
         js["events"] = events_json;
 
-        // Save all tasks
-        json tasks = json::array();
+        json tasks_json = json::array();
         for (auto t: all_tasks)
         {
-            json task = json::array();
-            task.push_back(t.task_id);
-            task.push_back(t.location/map.cols);
-            task.push_back(t.location%map.cols);
-            tasks.push_back(task);
+            json task_item;
+            task_item["task_id"] = t.task_id;
+            task_item["start_location"] = {t.start_location / map.cols, t.start_location % map.cols};
+            task_item["goal_location"] = {t.goal_location / map.cols, t.goal_location % map.cols};
+            tasks_json.push_back(task_item);
         }
-        js["tasks"] = tasks;
+        js["tasks"] = tasks_json;
     }
 
     std::ofstream f(fileName,std::ios_base::trunc |std::ios_base::out);
     f << std::setw(4) << js;
-
 }
 
 bool FixedAssignSystem::load_agent_tasks(string fname)
@@ -548,10 +366,9 @@ bool FixedAssignSystem::load_agent_tasks(string fname)
     boost::tokenizer<boost::char_separator<char>>::iterator beg = tok.begin();
 
     num_of_agents = atoi((*beg).c_str());
-    int task_id = 0;
-    // My benchmark
+    int task_id_counter = 0;
+
     if (num_of_agents == 0) {
-        //issue_logs.push_back("Load file failed");
         std::cerr << "The number of agents should be larger than 0" << endl;
         exit(-1);
     }
@@ -560,24 +377,21 @@ bool FixedAssignSystem::load_agent_tasks(string fname)
   
     for (int i = 0; i < num_of_agents; i++)
     {
-
         getline(myfile, line);
         while (!myfile.eof() && line[0] == '#')
             getline(myfile, line);
 
-        boost::tokenizer<boost::char_separator<char>> tok(line, sep);
-        boost::tokenizer<boost::char_separator<char>>::iterator beg = tok.begin();
-        // read start [row,col] for agent i
-        int num_landmarks = atoi((*beg).c_str());
-        beg++;
-        auto loc = atoi((*beg).c_str());
-        // agent_start_locations[i] = {loc, 0};
+        boost::tokenizer<boost::char_separator<char>> tok_line(line, sep);
+        auto it = tok_line.begin();
+        int num_landmarks = atoi((*it).c_str());
+        it++;
+        auto loc = atoi((*it).c_str());
         starts[i] = State(loc, 0, 0);
-        beg++;
-        for (int j = 0; j < num_landmarks; j++, beg++)
+        it++;
+        for (int j = 0; j < num_landmarks; j++, it++)
         {
-            auto loc = atoi((*beg).c_str());
-            task_queue[i].emplace_back(task_id++, loc, 0, i);
+            auto task_loc = atoi((*it).c_str());
+            task_queue[i].emplace_back(task_id_counter++, task_loc, task_loc, 0, i);
         }
     }
     myfile.close();
@@ -596,8 +410,9 @@ void FixedAssignSystem::update_tasks()
             task_queue[k].pop_front();
             assigned_tasks[k].push_back(task);
             events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            all_tasks.push_back(task);
-            // log_event_assigned(k, task.task_id, timestep);
+            if (std::find_if(all_tasks.begin(), all_tasks.end(), [&](const Task& t){ return t.task_id == task.task_id; }) == all_tasks.end()) {
+                all_tasks.push_back(task);
+            }
         }
     }
 }
@@ -615,8 +430,9 @@ void TaskAssignSystem::update_tasks()
             task_queue.pop_front();
             assigned_tasks[k].push_back(task);
             events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            all_tasks.push_back(task);
-            // log_event_assigned(k, task.task_id, timestep);
+            if (std::find_if(all_tasks.begin(), all_tasks.end(), [&](const Task& t){ return t.task_id == task.task_id; }) == all_tasks.end()) {
+                all_tasks.push_back(task);
+            }
         }
     }
 }
@@ -629,10 +445,9 @@ void InfAssignSystem::update_tasks(){
         {
             int i = task_counter[k] * num_of_agents + k;
             int loc = tasks[i%tasks_size];
-            Task task(task_id,loc,timestep,k);
+            Task task(task_id, loc, loc, timestep, k);
             assigned_tasks[k].push_back(task);
             events[k].push_back(make_tuple(task.task_id,timestep,"assigned"));
-            // log_event_assigned(k, task.task_id, timestep);
             all_tasks.push_back(task);
             task_id++;
             task_counter[k]++;

@@ -186,7 +186,7 @@ def run_continuous_simulation(server_url="http://localhost:8080"):
             total_completed = result.get("total_tasks_completed", 0)
             tasks_remaining = result.get("tasks_remaining", 0)
             
-            print(f"\rTimestep: {timestep} | Tasks Completed: {total_completed} | Tasks in Queue: {tasks_remaining}", end="")
+            print(f"\rTimestep: {timestep} | Tasks Completed: {total_completed}", end="")
             
             time.sleep(1) # Poll every second
 
