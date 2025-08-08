@@ -182,7 +182,7 @@ std::string MAPFServer::handle_reset_request() {
     all_tasks.clear();
     solution_costs.clear();
     actual_movements.clear();
-    // planner_movements.clear();
+    //planner_movements.clear();
     num_of_task_finish = 0;
     task_id = 0;
     fast_mover_feasible = true;
@@ -206,22 +206,22 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
         
         if (!session_active) {
             session_active = true;
+            if (!initial_states.empty()) {
+                agents = initial_states;
+            } else {
+                initial_states = agents;
+            }
             team_size = agents.size();
-            
             finished_tasks.assign(team_size, {});
             assigned_tasks.assign(team_size, {});
             is_carrying_task.assign(team_size, false);
             events.assign(team_size, {});
             solution_costs.assign(team_size, 0);
             actual_movements.assign(team_size, {});
-            // planner_movements.assign(team_size, {});
+            //planner_movements.assign(team_size, {});
             current_agent_states.resize(team_size);
             
-            if (!initial_states.empty()) {
-                agents = initial_states;
-            } else {
-                initial_states = agents;
-            }
+            
         }
 
         current_agent_states = agents;
@@ -278,7 +278,7 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
         history_of_planning_times.push_back(std::chrono::duration<double>(end_time - start_time).count());
         
         for (int k = 0; k < team_size; k++) {
-            // planner_movements[k].push_back(actions[k]);
+            //planner_movements[k].push_back(actions[k]);
             actual_movements[k].push_back(actions[k]);
         }
         
@@ -321,10 +321,10 @@ std::string MAPFServer::handle_report_request() {
     report["makespan"] = makespan;
 
     std::vector<std::string> actual_paths(team_size);
-    // std::vector<std::string> planner_paths(team_size);
+    //std::vector<std::string> planner_paths(team_size);
     
     for (int i = 0; i < team_size; i++) {
-        std::string a_path; //, p_path;
+        std::string a_path;
         for (const auto action : actual_movements[i]) a_path += action_to_string_local(action) + ",";
         if(!a_path.empty()) a_path.pop_back();
         actual_paths[i] = a_path;
@@ -334,7 +334,7 @@ std::string MAPFServer::handle_report_request() {
         // planner_paths[i] = p_path;
     }
     report["actualPaths"] = actual_paths;
-    // report["plannerPaths"] = planner_paths;
+    //report["plannerPaths"] = planner_paths;
 
     report["plannerTimes"] = history_of_planning_times;
     report["errors"] = nlohmann::json::array();
