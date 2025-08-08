@@ -57,6 +57,10 @@ private:
     void log_event_assigned(int agent_id, int task_id, int timestep);
     void log_event_finished(int agent_id, int task_id, int timestep);
     
+    // Distance calculation and nearest agent assignment
+    int calculate_manhattan_distance(int location1, int location2);
+    int find_nearest_free_agent(int task_start_location, const std::vector<State>& current_states);
+    
     // Problem loading and saving
     bool load_problem_configuration(const std::string& problem_file);
     void initialize_task_system();

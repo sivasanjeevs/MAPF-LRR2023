@@ -9,6 +9,7 @@
 #include <chrono>
 #include <numeric>
 #include <cstdlib>
+#include <limits>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -181,7 +182,7 @@ std::string MAPFServer::handle_reset_request() {
     all_tasks.clear();
     solution_costs.clear();
     actual_movements.clear();
-    planner_movements.clear();
+    // planner_movements.clear();
     num_of_task_finish = 0;
     task_id = 0;
     fast_mover_feasible = true;
@@ -213,7 +214,7 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
             events.assign(team_size, {});
             solution_costs.assign(team_size, 0);
             actual_movements.assign(team_size, {});
-            planner_movements.assign(team_size, {});
+            // planner_movements.assign(team_size, {});
             current_agent_states.resize(team_size);
             
             if (!initial_states.empty()) {
@@ -277,7 +278,7 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
         history_of_planning_times.push_back(std::chrono::duration<double>(end_time - start_time).count());
         
         for (int k = 0; k < team_size; k++) {
-            planner_movements[k].push_back(actions[k]);
+            // planner_movements[k].push_back(actions[k]);
             actual_movements[k].push_back(actions[k]);
         }
         
@@ -320,20 +321,20 @@ std::string MAPFServer::handle_report_request() {
     report["makespan"] = makespan;
 
     std::vector<std::string> actual_paths(team_size);
-    std::vector<std::string> planner_paths(team_size);
+    // std::vector<std::string> planner_paths(team_size);
     
     for (int i = 0; i < team_size; i++) {
-        std::string a_path, p_path;
+        std::string a_path; //, p_path;
         for (const auto action : actual_movements[i]) a_path += action_to_string_local(action) + ",";
         if(!a_path.empty()) a_path.pop_back();
         actual_paths[i] = a_path;
         
-        for (const auto action : planner_movements[i]) p_path += action_to_string_local(action) + ",";
-        if(!p_path.empty()) p_path.pop_back();
-        planner_paths[i] = p_path;
+        // for (const auto action : planner_movements[i]) p_path += action_to_string_local(action) + ",";
+        // if(!p_path.empty()) p_path.pop_back();
+        // planner_paths[i] = p_path;
     }
     report["actualPaths"] = actual_paths;
-    report["plannerPaths"] = planner_paths;
+    // report["plannerPaths"] = planner_paths;
 
     report["plannerTimes"] = history_of_planning_times;
     report["errors"] = nlohmann::json::array();
@@ -385,19 +386,57 @@ std::string MAPFServer::handle_add_task_request(const std::string& request_body)
     }
 }
 
+int MAPFServer::calculate_manhattan_distance(int location1, int location2) {
+    // Convert linear indices to grid coordinates
+    int row1 = location1 / grid->cols;
+    int col1 = location1 % grid->cols;
+    int row2 = location2 / grid->cols;
+    int col2 = location2 % grid->cols;
+    
+    // Calculate Manhattan distance
+    return abs(row1 - row2) + abs(col1 - col2);
+}
+
+int MAPFServer::find_nearest_free_agent(int task_start_location, const std::vector<State>& current_states) {
+    int nearest_agent = -1;
+    int min_distance = std::numeric_limits<int>::max();
+    
+    for (int k = 0; k < team_size; k++) {
+        // Check if agent is free (no assigned tasks)
+        if (assigned_tasks[k].empty()) {
+            int distance = calculate_manhattan_distance(task_start_location, current_states[k].location);
+            if (distance < min_distance) {
+                min_distance = distance;
+                nearest_agent = k;
+            }
+        }
+    }
+    
+    return nearest_agent;
+}
+
 void MAPFServer::update_tasks_lifelong(const std::vector<State>& current_states) {
     if (team_size <= 0) return;
     
-    for (int k = 0; k < team_size; k++) {
-        if (assigned_tasks[k].empty() && !task_queue.empty()) {
-            Task task = task_queue.front();
-            task_queue.pop_front();
-            task.t_assigned = timestep;
-            task.agent_assigned = k;
-            assigned_tasks[k].push_back(task);
-            all_tasks.push_back(task);
-            log_event_assigned(k, task.task_id, timestep);
+    // Process tasks one by one, assigning each to the nearest free agent
+    while (!task_queue.empty()) {
+        Task task = task_queue.front();
+        
+        // Find the nearest free agent to this task's start location
+        int nearest_agent = find_nearest_free_agent(task.start_location, current_states);
+        
+        // If no free agent found, break (wait for next timestep)
+        if (nearest_agent == -1) {
+            break;
         }
+        
+        // Assign task to the nearest agent
+        task_queue.pop_front();
+        task.t_assigned = timestep;
+        task.agent_assigned = nearest_agent;
+        assigned_tasks[nearest_agent].push_back(task);
+        all_tasks.push_back(task);
+        log_event_assigned(nearest_agent, task.task_id, timestep);
     }
 }
 
