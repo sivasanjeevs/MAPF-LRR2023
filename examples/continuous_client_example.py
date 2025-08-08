@@ -101,14 +101,7 @@ def run_continuous_simulation(server_url="http://localhost:8080"):
     print("=== Starting Continuous MAPF Simulation (Persistent Session) ===")
     
     # Initial agent positions (these will be used to start the session)
-    agents = [
-        {"location": 2, "orientation": 0, "timestep": 0},
-        {"location": 3, "orientation": 0, "timestep": 0},
-        {"location": 4, "orientation": 0, "timestep": 0},
-        {"location": 5, "orientation": 0, "timestep": 0},
-        {"location": 6, "orientation": 0, "timestep": 0}
-    ]
-    
+    agents = []
     timestep = 0
     
     try:
@@ -140,15 +133,16 @@ def run_continuous_simulation(server_url="http://localhost:8080"):
         
         # Update agents based on initial plan
         result = response.json()
-        planned_actions = result.get("actions", [])
-        if planned_actions:
-            for i, action_data in enumerate(planned_actions):
-                if i < len(agents):
-                    agents[i]["location"] = action_data.get("location", agents[i]["location"])
-                    agents[i]["orientation"] = action_data.get("orientation", agents[i]["orientation"])
+        agents = result.get("actions", [])
+        # planned_actions = result.get("actions", [])
+        # if planned_actions:
+        #     for i, action_data in enumerate(planned_actions):
+        #         if i < len(agents):
+        #             agents[i]["location"] = action_data.get("location", agents[i]["location"])
+        #             agents[i]["orientation"] = action_data.get("orientation", agents[i]["orientation"])
         
         print("\n4. Now running continuously. Add tasks from another terminal.")
-        print("   Example: python3 examples/add_task_client.py --location 29")
+        #print("   Example: python3 examples/add_task_client.py --location 29")
         print("   Press Ctrl+C to stop the client.")
         
         # --- Continuous Loop ---
@@ -188,7 +182,7 @@ def run_continuous_simulation(server_url="http://localhost:8080"):
             
             print(f"\rTimestep: {timestep} | Tasks Completed: {total_completed}", end="")
             
-            time.sleep(1) # Poll every second
+            time.sleep(0.1) # Poll every second
 
     except requests.exceptions.ConnectionError as e:
         print(f"\nConnection lost: {e}")
