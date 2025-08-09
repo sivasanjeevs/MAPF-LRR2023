@@ -182,7 +182,7 @@ def run_continuous_simulation(server_url="http://localhost:8080"):
             
             print(f"\rTimestep: {timestep} | Tasks Completed: {total_completed}", end="")
             
-            time.sleep(0.1) # Poll every second
+            time.sleep(1) # Poll every second
 
     except requests.exceptions.ConnectionError as e:
         print(f"\nConnection lost: {e}")

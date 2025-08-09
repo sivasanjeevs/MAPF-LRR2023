@@ -275,7 +275,8 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
                 int goal = is_carrying_task[i] ? assigned_tasks[i].front().goal_location : assigned_tasks[i].front().start_location;
                 env->goal_locations[i].push_back({goal, timestep});
             } else {
-                env->goal_locations[i].push_back({agents[i].location, timestep});
+                // Change: Agent is idle, goal is its initial starting location.
+                env->goal_locations[i].push_back({initial_states[i].location, timestep});
             }
         }
             
@@ -320,6 +321,8 @@ std::string MAPFServer::handle_plan_request(const std::string& request_body) {
     }
 }
 
+// In src/MAPFServer.cpp
+
 std::string MAPFServer::handle_report_request() {
     if (!session_active) {
         return nlohmann::json({{"error", "No Active Session"}}).dump(4);
@@ -343,20 +346,21 @@ std::string MAPFServer::handle_report_request() {
     report["makespan"] = makespan;
 
     std::vector<std::string> actual_paths(team_size);
-    //std::vector<std::string> planner_paths(team_size);
+    std::vector<std::string> planner_paths(team_size);
     
     for (int i = 0; i < team_size; i++) {
-        std::string a_path;
+        std::string a_path, p_path;
         for (const auto action : actual_movements[i]) a_path += action_to_string_local(action) + ",";
         if(!a_path.empty()) a_path.pop_back();
         actual_paths[i] = a_path;
         
+        // This part was commented out in your file, uncomment if you need planner paths
         // for (const auto action : planner_movements[i]) p_path += action_to_string_local(action) + ",";
         // if(!p_path.empty()) p_path.pop_back();
         // planner_paths[i] = p_path;
     }
     report["actualPaths"] = actual_paths;
-    //report["plannerPaths"] = planner_paths;
+    // report["plannerPaths"] = planner_paths;
 
     report["plannerTimes"] = history_of_planning_times;
     report["errors"] = nlohmann::json::array();
@@ -371,10 +375,13 @@ std::string MAPFServer::handle_report_request() {
     }
     report["events"] = events_json;
 
+    // FIX: This now outputs start and goal locations for each task
     nlohmann::json tasks_json = nlohmann::json::array();
     for (const auto& t: all_tasks) {
         tasks_json.push_back({
             t.task_id,
+            t.start_location / grid->cols,
+            t.start_location % grid->cols,
             t.goal_location / grid->cols,
             t.goal_location % grid->cols
         });
