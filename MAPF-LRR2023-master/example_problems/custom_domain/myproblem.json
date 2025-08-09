@@ -1,8 +1,0 @@
-{
-    "mapFile": "maps/mymap.map",
-    "agentFile": "agents/myagents.agents",
-    "teamSize": 5,
-    "taskFile": "task/mytask.tasks",
-    "numTasksReveal": 1,
-    "taskAssignmentStrategy": "greedy"
-}
