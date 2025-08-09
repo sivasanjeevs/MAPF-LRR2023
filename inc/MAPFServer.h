@@ -35,7 +35,7 @@ private:
 
     void start_http_server();
     void handle_http_request(const std::string& method, const std::string& path,
-                             const std::string& body, std::string& response);
+                             const std::string& body, std::string& response, std::string& content_type);
 
     // Endpoint handlers
     std::string handle_plan_request(const std::string& request_body);
@@ -45,6 +45,7 @@ private:
     // FIX: Re-add missing function declarations
     std::string handle_health_request();
     std::string handle_task_status_request();
+    std::string handle_docs_request();
 
 
     // Helper methods

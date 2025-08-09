@@ -10,6 +10,8 @@
 #include <numeric>
 #include <cstdlib>
 #include <limits>
+#include <fstream> // Required for file reading
+#include <sstream>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -35,6 +37,7 @@ MAPFServer::~MAPFServer() {
 
 bool MAPFServer::initialize() {
     try {
+        
         grid = std::make_unique<Grid>(map_file);
         action_model = std::make_unique<ActionModelWithRotate>(*grid);
         
@@ -87,6 +90,8 @@ void MAPFServer::start_http_server() {
         asio::ip::tcp::acceptor acceptor(*io_context, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), static_cast<unsigned short>(port)));
         std::cout << "HTTP Server started on port " << port << std::endl;
 
+        
+
         while (running) {
             tcp::socket socket(*io_context);
             acceptor.accept(socket);
@@ -96,11 +101,13 @@ void MAPFServer::start_http_server() {
                     http::request<http::string_body> req;
                     http::read(socket, buffer, req);
                     std::string response_body;
-                    handle_http_request(std::string(req.method_string()), std::string(req.target()), req.body(), response_body);
+                    std::string content_type = "application/json";
+                    handle_http_request(std::string(req.method_string()), std::string(req.target()), req.body(), response_body, content_type);
                     http::response<http::string_body> res;
                     res.result(http::status::ok);
                     res.set(http::field::server, "MAPF-Server");
-                    res.set(http::field::content_type, "application/json");
+                    res.set(http::field::content_type, content_type);
+                    //res.set(http::field::access_control_allow_origin, "*");
                     res.body() = response_body;
                     res.prepare_payload();
                     http::write(socket, res);
@@ -115,25 +122,40 @@ void MAPFServer::start_http_server() {
 }
 
 void MAPFServer::handle_http_request(const std::string& method, const std::string& path,
-                                     const std::string& body, std::string& response) {
+                                     const std::string& body, std::string& response, std::string& content_type) {
     try {
         if (method == "POST" && path == "/plan") {
             response = handle_plan_request(body);
+            content_type = "application/json";
         } else if (method == "GET" && path == "/report") {
             response = handle_report_request();
+            content_type = "application/json";
         } else if (method == "POST" && path == "/reset") {
             response = handle_reset_request();
+            content_type = "application/json";
         } else if (method == "POST" && path == "/add_task") {
             response = handle_add_task_request(body);
+            content_type = "application/json";
         } else if (method == "GET" && path == "/health") {
             response = handle_health_request();
+            content_type = "application/json";
         } else if (method == "GET" && path == "/task_status") {
             response = handle_task_status_request();
+            content_type = "application/json";
+        } else if (method == "GET" && path == "/docs") {
+            response = handle_docs_request();
+            if (response.rfind("{\"error\"", 0) == 0) {
+                content_type = "application/json"; // It's a JSON error message
+           } else {
+                content_type = "application/yaml"; // It's the YAML documentation
+           }
         } else {
             response = nlohmann::json({{"error", "Not Found"}}).dump(4);
+            content_type = "application/json";
         }
     } catch (const std::exception& e) {
         response = nlohmann::json({{"error", "Internal Server Error"}, {"message", e.what()}}).dump(4);
+        content_type = "application/json";
     }
 }
 
@@ -384,6 +406,24 @@ std::string MAPFServer::handle_add_task_request(const std::string& request_body)
     } catch (const std::exception& e) {
         return nlohmann::json({{"error", "Add Task Failed"}, {"message", e.what()}}).dump(4);
     }
+}
+
+std::string MAPFServer::handle_docs_request() {
+    // Attempt to open the swagger.yaml file
+    std::ifstream file("swagger.yaml");
+    
+    if (!file.is_open()) {
+        // If the file can't be found or opened, return a JSON error message
+        return nlohmann::json({
+            {"error", "Not Found"},
+            {"message", "Documentation file 'swagger.yaml' not found on the server."}
+        }).dump(4);
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+
+    return buffer.str();
 }
 
 int MAPFServer::calculate_manhattan_distance(int location1, int location2) {
